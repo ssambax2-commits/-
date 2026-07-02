@@ -1,0 +1,26 @@
+# 빌드/실행 산출물
+venv/
+build/
+dist/
+wheels/
+*.spec.bak
+
+# 런타임 데이터(로컬 누적 상태 — 백업은 별도)
+data/
+*.sqlite
+*.joblib
+추천보고서_*.xlsx
+피드백_*.xlsx
+
+# 파이썬 캐시
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# 에디터/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
