@@ -26,18 +26,18 @@ except ImportError:  # 스크립트 직접 실행 대비
     from corona_reco import config
 
 # ---------------------------------------------------------------------------
-# 웰컴금융그룹 CI — 오렌지 톤 커스텀 테마
-#   primary(웰컴 오렌지) 중심, 웜그레이(≈Welcome Warm Gray) 중립색 사용.
-#   ※ 웰컴 공식 시그니처는 'Welcome Red'(#EA002C)이나, 사용자 요청에 따라
-#     오렌지 톤을 primary로 적용. 필요 시 primary를 #EA002C로 교체 가능.
+# 웰컴금융그룹 CI — 레드+오렌지 투톤 커스텀 테마
+#   헤더 배너 = Welcome Red(#EA002C, 공식 시그니처) 고정,
+#   포인트(버튼/진행바/선택 강조) = 웰컴 오렌지, 중립 = 웜그레이 계열.
 # ---------------------------------------------------------------------------
-WELCOME_ORANGE = "#FF6B00"
+WELCOME_RED = "#EA002C"           # 웰컴금융그룹 공식 Welcome Red
+WELCOME_ORANGE = "#FF6B00"        # 포인트 오렌지
 WELCOME_ORANGE_ACTIVE = "#E85D00"
-WELCOME_WARM_GRAY = "#EAE0D3"
+WELCOME_WARM_GRAY = "#EAE0D3"     # Welcome Warm Gray
 
 _WELCOME_LIGHT = {
     "primary": WELCOME_ORANGE, "secondary": "#8C8078", "success": "#2E9E6B",
-    "info": "#4A7FB5", "warning": "#F2A100", "danger": "#E0483E",
+    "info": "#4A7FB5", "warning": "#F2A100", "danger": WELCOME_RED,
     "light": "#FBF4EC", "dark": "#3A342F",
     "bg": "#FFFFFF", "fg": "#33302A",
     "selectbg": WELCOME_ORANGE, "selectfg": "#FFFFFF",
@@ -46,10 +46,10 @@ _WELCOME_LIGHT = {
 }
 _WELCOME_DARK = {
     "primary": "#FF7A1A", "secondary": "#B0A79E", "success": "#3AB57E",
-    "info": "#5E9BD6", "warning": "#F2A100", "danger": "#E86A62",
+    "info": "#5E9BD6", "warning": "#F2A100", "danger": "#F0405E",
     "light": "#3A342F", "dark": "#F3ECE4",
     "bg": "#211D1A", "fg": "#F3ECE4",
-    "selectbg": "#FF7A1A", "selectfg": "#1A1A1A",
+    "selectbg": "#FF7A1A", "selectfg": "#FFFFFF",
     "border": "#3A342F", "inputfg": "#F3ECE4", "inputbg": "#2A2521",
     "active": "#FF8C3A",
 }
@@ -140,7 +140,6 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     root.minsize(880, 700)
 
     fam = _pick_font(tkfont)
-    base_font = (fam, 10)
     try:
         for fn in ("TkDefaultFont", "TkTextFont", "TkMenuFont", "TkHeadingFont"):
             tkfont.nametofont(fn).configure(family=fam, size=10)
@@ -151,44 +150,40 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     log_q: "queue.Queue" = queue.Queue()
     state = {"running": False, "last": None}
 
-    # ======================= 헤더 배너(웰컴 오렌지) =======================
-    hdr_bg = COLOR_PRIMARY
-    if using_tb:
-        try:
-            hdr_bg = root.style.colors.primary
-        except Exception:  # noqa: BLE001
-            hdr_bg = COLOR_PRIMARY
+    # ============ 헤더 배너(웰컴 CI 투톤: 레드 배너 + 오렌지 스트라이프) ============
+    # CI 배너는 테마와 무관하게 Welcome Red 고정 → plain tk 위젯으로 구성.
+    # ttkbootstrap은 legacy tk 위젯을 테마색으로 autostyle 덧칠하므로 반드시 끈다.
+    legacy_kw = {"autostyle": False} if using_tb else {}
 
-    header = (tb.Frame(root, bootstyle="primary") if using_tb
-              else tk.Frame(root, bg=hdr_bg))
+    header = tk.Frame(root, bg=WELCOME_RED, **legacy_kw)
     header.pack(fill="x")
-    bar = (tb.Frame(header, bootstyle="primary") if using_tb
-           else tk.Frame(header, bg=hdr_bg))
+    bar = tk.Frame(header, bg=WELCOME_RED, **legacy_kw)
     bar.pack(fill="x", padx=18, pady=12)
 
-    # 웰컴 로고 배지(흰 원형 배지 + 오렌지 W)
-    logo = tk.Canvas(bar, width=48, height=48, highlightthickness=0, bg=hdr_bg, bd=0)
+    # 웰컴 로고 배지(흰 원형 배지 + 레드 W)
+    logo = tk.Canvas(bar, width=48, height=48, highlightthickness=0,
+                     bg=WELCOME_RED, bd=0, **legacy_kw)
     logo.pack(side="left", padx=(0, 14))
     logo.create_oval(3, 3, 45, 45, fill="#FFFFFF", outline="")
-    _w_text_id = logo.create_text(24, 25, text="W", fill=hdr_bg, font=(fam, 22, "bold"))
+    logo.create_text(24, 25, text="W", fill=WELCOME_RED, font=(fam, 22, "bold"))
 
-    textcol = (tb.Frame(bar, bootstyle="primary") if using_tb
-               else tk.Frame(bar, bg=hdr_bg))
+    textcol = tk.Frame(bar, bg=WELCOME_RED, **legacy_kw)
     textcol.pack(side="left", fill="x", expand=True)
 
-    def hlabel(parent, text, size, bold):
-        if using_tb:
-            return tb.Label(parent, text=text, bootstyle="inverse-primary",
-                            font=(fam, size, "bold" if bold else "normal"))
-        return tk.Label(parent, text=text, bg=hdr_bg, fg=COLOR_HEADER_FG,
-                        font=(fam, size, "bold" if bold else "normal"))
+    def hlabel(text, size, bold, fg="#FFFFFF"):
+        return tk.Label(textcol, text=text, bg=WELCOME_RED, fg=fg,
+                        font=(fam, size, "bold" if bold else "normal"), **legacy_kw)
 
-    hlabel(textcol, "웰컴금융그룹  ·  WELCOME FINANCIAL GROUP", 9, True).pack(anchor="w")
-    hlabel(textcol, config.APP_NAME, 17, True).pack(anchor="w", pady=(1, 0))
-    hlabel(textcol, "채무조정 폐지 코로나채권 중 1개월 내 자발 상환 가능성이 높은 채권을 "
-                    "부담당자별로 추천합니다.", 10, False).pack(anchor="w", pady=(2, 0))
-    hlabel(textcol, f"버전 {config.APP_VERSION}   ·   실행(추론) 중 외부 네트워크 호출 없음",
-           9, False).pack(anchor="w", pady=(1, 0))
+    hlabel("웰컴금융그룹  ·  WELCOME FINANCIAL GROUP", 9, True,
+           fg=WELCOME_WARM_GRAY).pack(anchor="w")
+    hlabel(config.APP_NAME, 17, True).pack(anchor="w", pady=(1, 0))
+    hlabel("채무조정 폐지 코로나채권 중 1개월 내 자발 상환 가능성이 높은 채권을 "
+           "부담당자별로 추천합니다.", 10, False, fg="#FFE9DC").pack(anchor="w", pady=(2, 0))
+    hlabel(f"버전 {config.APP_VERSION}   ·   실행(추론) 중 외부 네트워크 호출 없음",
+           9, False, fg=WELCOME_WARM_GRAY).pack(anchor="w", pady=(1, 0))
+
+    # 오렌지 포인트 스트라이프(투톤 경계선)
+    tk.Frame(root, bg=WELCOME_ORANGE, height=4, **legacy_kw).pack(fill="x")
 
     # ======================= 노트북(탭) =======================
     nb = ttk.Notebook(root)
@@ -301,7 +296,7 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     _lbg, _lfg = theme_text_colors()
     log_txt = tk.Text(log_lf, height=10, wrap="word", font=mono, relief="flat",
                       background=_lbg, foreground=_lfg, insertbackground=_lfg,
-                      borderwidth=0)
+                      borderwidth=0, **legacy_kw)
     log_txt.pack(fill="both", expand=True, side="left")
     log_sb = ttk.Scrollbar(log_lf, command=log_txt.yview)
     log_sb.pack(side="right", fill="y")
@@ -356,16 +351,15 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     trow = ttk.Frame(tfrm); trow.pack(fill="x")
     ttk.Label(trow, text="테마", width=8).pack(side="left")
     theme_cb = ttk.Combobox(trow, textvariable=var_theme, width=16,
-                            values=_FALLBACK_THEMES, state="readonly")
+                            values=_FALLBACK_THEMES,
+                            state=("readonly" if using_tb else "disabled"))
     theme_cb.pack(side="left")
 
     def on_theme(*_):
+        # 헤더 배너는 CI 고정색(Welcome Red)이라 테마 전환과 무관.
         if using_tb:
             try:
                 root.style.theme_use(var_theme.get())
-                newbg = root.style.colors.primary
-                logo.config(bg=newbg)
-                logo.itemconfigure(_w_text_id, fill=newbg)
                 lbg, lfg = theme_text_colors()
                 log_txt.config(background=lbg, foreground=lfg, insertbackground=lfg)
             except Exception:  # noqa: BLE001

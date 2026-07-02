@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from . import config, util
-from .io_loader import load_excel_all_sheets, normalize_columns, _norm_key
+from .io_loader import load_excel_all_sheets, _norm_key
 
 # 피드백 컬럼 별칭 (canonical -> 후보 표기들)
 _FEEDBACK_ALIASES = {
@@ -299,7 +299,6 @@ def build_segment_calibration(feedback_seg: pd.DataFrame,
                 d["rn"] += 1
         for v, d in by_val.items():
             p_eb = (d["succ"] + m * p_global) / (d["n"] + m)
-            r_local = (d["rsum"] / d["rn"]) if d["rn"] > 0 else r_global
             r_eb = (d["rsum"] + m * r_global) / (d["rn"] + m) if (d["rn"] + m) > 0 else r_global
             d["p_eb"] = p_eb
             d["r_eb"] = r_eb

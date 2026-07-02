@@ -166,7 +166,9 @@ def run_pipeline(opt: RunOptions, progress: Optional[Callable] = None) -> RunRes
             act, opt.ref_date, opt.exclude_expired_prescription)
         excluded_df = act_ex[act_ex["_제외여부"]].copy()
         diagnostics["제외 계좌 수"] = int(len(excluded_df))
+        # 채권상태(대)=특수채권 & 원장상태=활동 → 진단만 표시(제외 아님, §2)
         special_diag = exclusions.special_bond_diagnostic(act_ex)
+        diagnostics["특수채권 상태값 확인 필요(계좌)"] = int((special_diag != "").sum())
 
         # 4) 나이대/성별 (주민번호 원본 폐기)
         _log(progress, "나이대/성별 산출(주민번호 원본 폐기)...")

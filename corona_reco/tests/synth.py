@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import datetime as _dt
 import random
-from typing import List
 
 import pandas as pd
 

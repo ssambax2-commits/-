@@ -8,7 +8,6 @@ exclusions.py — 강제 제외 규칙 + 차주 단위 전파
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Optional
 
 import pandas as pd
 
@@ -53,7 +52,6 @@ def apply_exclusions(df: pd.DataFrame, ref_date: _dt.date,
     borrower_flag = {}  # borrower_key -> 전파사유(set)
 
     for i in range(n):
-        idx = df.index[i]
         bk = borrower_key(gonum.iloc[i], name.iloc[i])
         bkeys[i] = bk
         acct_reasons = []

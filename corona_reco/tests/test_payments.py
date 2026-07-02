@@ -4,7 +4,7 @@ import datetime as _dt
 
 import pandas as pd
 
-from corona_reco import payments, util
+from corona_reco import payments
 
 REF = _dt.date(2026, 7, 1)
 
@@ -74,6 +74,38 @@ def test_positional_fallback():
     assert df.shape[1] == 82
     d = payments.derive_payments(df, REF)
     assert d["입금_이력유무"].iloc[0]
+
+
+def test_positional_garbage_guard():
+    """위치 fallback: 일자칸에 비일자 텍스트 → 입금으로 오인하지 않음."""
+    data = {f"c{i}": [""] for i in range(80)}
+    data["p80"] = ["서울지점"]   # 날짜 아님
+    data["p81"] = [12345]        # 숫자(코드값)
+    df = pd.DataFrame(data)
+    d = payments.derive_payments(df, REF)
+    assert not d["입금_이력유무"].iloc[0]
+
+
+def test_positional_implausible_date_guard():
+    """위치 fallback: serial 오인으로 1990년 이전 날짜가 나오면 무시."""
+    data = {f"c{i}": [""] for i in range(80)}
+    data["p80"] = [12345]        # serial → 1933년(비현실)
+    data["p81"] = [100000]
+    df = pd.DataFrame(data)
+    d = payments.derive_payments(df, REF)
+    assert not d["입금_이력유무"].iloc[0]
+
+
+def test_positional_amount_only_still_allowed():
+    """위치 fallback: 일자칸 빈 값 + 금액 → 일자불명 입금으로 인정."""
+    data = {f"c{i}": [""] for i in range(80)}
+    data["p80"] = [""]
+    data["p81"] = [150000]
+    df = pd.DataFrame(data)
+    d = payments.derive_payments(df, REF)
+    assert d["입금_이력유무"].iloc[0]
+    assert d["입금_일자불명금액존재"].iloc[0]
+    assert d["입금_최근액"].iloc[0] == 150000  # 확인된 금액 중 최대값 근사
 
 
 def test_amount_bonuses():

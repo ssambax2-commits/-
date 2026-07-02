@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import pandas as pd
@@ -104,11 +104,18 @@ class PaymentDerived:
 
 
 def _derive_one(values: List[Tuple[Optional[object], object]],
-                ref_date: _dt.date) -> PaymentDerived:
-    """(일자값, 금액값) 목록 → 파생값. 금액 ≤ 0 은 무시."""
+                ref_date: _dt.date, strict: bool = False) -> PaymentDerived:
+    """(일자값, 금액값) 목록 → 파생값. 금액 ≤ 0 은 무시.
+
+    strict=True(위치 기반 fallback 전용): 비표준 파일에서 임의 컬럼을 입금으로
+    오인하지 않도록, 일자칸에 비일자 텍스트가 있거나 파싱된 날짜가 비현실
+    구간(1990년 이전/평가 기준일+400일 이후)이면 해당 쌍을 무시한다.
+    (일자칸이 빈 값 + 금액만 있는 '일자불명' 입금은 계속 인정)
+    """
     d = PaymentDerived()
     dated_dates: List[_dt.date] = []
     dated_amounts: List[float] = []
+    all_amounts: List[float] = []
     undated_amount_exists = False
     total = 0.0
     count = 0
@@ -117,9 +124,17 @@ def _derive_one(values: List[Tuple[Optional[object], object]],
         amt = util.to_number(amt_val)
         if amt is None or amt <= 0:
             continue  # 환급/취소 추정 또는 빈값
+        pdate = util.parse_date(date_val) if date_val is not None else None
+        if strict:
+            ds = util.clean_str(date_val)
+            if ds and pdate is None:
+                continue  # 일자칸에 날짜 아닌 값 → 오인 방지
+            if pdate is not None and not (
+                    _dt.date(1990, 1, 1) <= pdate <= ref_date + _dt.timedelta(days=400)):
+                continue  # 코드값 등이 serial 날짜로 오인된 경우
         count += 1
         total += amt
-        pdate = util.parse_date(date_val) if date_val is not None else None
+        all_amounts.append(amt)
         if pdate is not None:
             dated_dates.append(pdate)
             dated_amounts.append(amt)
@@ -151,9 +166,9 @@ def _derive_one(values: List[Tuple[Optional[object], object]],
             # 평가 기준일보다 미래 입금(데이터 오류) → 최근으로 간주하지 않음
             pass
     else:
-        # 금액만 있고 일자 전부 불명
+        # 금액만 있고 일자 전부 불명 — 최근액은 확인된 입금액 중 최대값으로 근사
         d.amount_only_no_date = True
-        d.last_paid_amount = max(dated_amounts) if dated_amounts else 0.0
+        d.last_paid_amount = max(all_amounts) if all_amounts else 0.0
 
     if undated_amount_exists and dated_dates:
         # 일부는 일자 있고 일부는 없음 → 이력은 dated 기준, 금액존재 플래그도 표시
@@ -178,7 +193,7 @@ def derive_payments(df: pd.DataFrame, ref_date: _dt.date) -> pd.DataFrame:
                 vals.append((dv, av))
             rows.append(_derive_one(vals, ref_date).as_row())
     else:
-        # 위치 기반 fallback
+        # 위치 기반 fallback (strict: 임의 컬럼 오인 방지 가드)
         ppairs = positional_pairs(df)
         arr = df.values
         for i in range(len(df)):
@@ -187,7 +202,7 @@ def derive_payments(df: pd.DataFrame, ref_date: _dt.date) -> pd.DataFrame:
                 dv = arr[i][dpos] if (dpos is not None and dpos < arr.shape[1]) else None
                 av = arr[i][apos] if (apos is not None and apos < arr.shape[1]) else None
                 vals.append((dv, av))
-            rows.append(_derive_one(vals, ref_date).as_row())
+            rows.append(_derive_one(vals, ref_date, strict=True).as_row())
 
     return pd.DataFrame(rows, index=df.index)
 

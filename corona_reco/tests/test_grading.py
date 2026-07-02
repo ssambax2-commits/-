@@ -2,7 +2,6 @@
 """차주통합/등급/상한/최소보장/팀배정 테스트 (§9: 8, 12)."""
 import datetime as _dt
 
-import numpy as np
 import pandas as pd
 
 from corona_reco import config, grading

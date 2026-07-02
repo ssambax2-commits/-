@@ -24,7 +24,8 @@ USER_COLUMNS = [
     "실제입금여부", "실제입금액", "입금일자", "비고",
 ]
 INPUT_COLUMNS = {"실제입금여부", "실제입금액", "입금일자", "비고"}
-AMOUNT_COLUMNS = {"원금잔액", "다중계좌원금잔액", "실제입금액", "추천점수"}
+AMOUNT_COLUMNS = {"원금잔액", "다중계좌원금잔액", "실제입금액"}
+SCORE_COLUMNS = {"추천점수"}   # 소수점 유지 표시
 TEXT_COLUMNS = {"고객번호"}
 
 HIDDEN_COLUMNS = ["추천월", "고객번호", "성명", "대출번호", "등급", "모델버전", "피처벡터"]
@@ -82,6 +83,8 @@ def write_feedback_file(path: str, borrowers: pd.DataFrame,
             cell = ws.cell(row=ri, column=c, value=row[c - 1])
             if h in AMOUNT_COLUMNS:
                 cell.number_format = "#,##0"
+            if h in SCORE_COLUMNS:
+                cell.number_format = "0.00"
             if h in TEXT_COLUMNS:
                 cell.number_format = "@"
             if h in INPUT_COLUMNS:

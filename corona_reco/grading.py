@@ -9,9 +9,8 @@ grading.py — 차주 통합, 등급, 부담당자 상한/최소보장, 팀 배�
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
-import numpy as np
 import pandas as pd
 
 from . import config, util
