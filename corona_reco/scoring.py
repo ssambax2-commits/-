@@ -317,9 +317,13 @@ def compute_scores(df: pd.DataFrame, pay: pd.DataFrame, ref_date: _dt.date,
                    biz_series: Optional[pd.Series] = None,
                    paid_prob: Optional[pd.Series] = None,
                    feedback_adj: Optional[pd.Series] = None,
+                   stage2_adj: Optional[pd.Series] = None,
                    weights: Optional[Dict[str, float]] = None,
                    ml_active: bool = None) -> pd.DataFrame:
-    """전체 채점. 반환 DataFrame(각 세부점수 + pre_score + final_corona_score)."""
+    """전체 채점. 반환 DataFrame(각 세부점수 + pre_score + final_corona_score).
+
+    stage2_adj: Stage2(예상회수) 활성 시 소폭 additive 보너스(기본 없음=0).
+    """
     if weights is None:
         weights = dict(config.DEFAULT_WEIGHTS)
     if ml_active is None:
@@ -344,12 +348,17 @@ def compute_scores(df: pd.DataFrame, pay: pd.DataFrame, ref_date: _dt.date,
     else:
         fb = feedback_adj.reindex(df.index).fillna(0.0)
 
+    if stage2_adj is None:
+        s2 = pd.Series(np.zeros(len(df)), index=df.index)
+    else:
+        s2 = stage2_adj.reindex(df.index).fillna(0.0)
+
     pre = (eff_w["base"] * base
            + eff_w["paid_similarity"] * sim
            + eff_w["payment_history"] * payh
            + eff_w["burden"] * burden)
 
-    final = (pre * coll_mult) - penalty + prior_adj + fb
+    final = (pre * coll_mult) - penalty + prior_adj + fb + s2
     final = final.clip(lower=0, upper=100)
 
     out = pd.DataFrame(index=df.index)
@@ -363,6 +372,7 @@ def compute_scores(df: pd.DataFrame, pay: pd.DataFrame, ref_date: _dt.date,
     out["collateral_cap"] = coll_cap
     out["collateral_key"] = coll_key
     out["feedback_adj"] = fb
+    out["stage2_adj"] = s2
     out["pre_score"] = pre
     out["final_score"] = final
     return out

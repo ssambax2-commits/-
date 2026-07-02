@@ -115,8 +115,12 @@ def aggregate_borrowers(df: pd.DataFrame, scores: pd.DataFrame,
     work["_within180"] = pay["입금_최근180일"].values
     # reasons/저장용 대표 세부점수
     for c in ["base_score", "paid_similarity_score", "payment_history_score",
-              "burden_score", "external_prior_adj", "feedback_adj", "sensitive_penalty"]:
-        work["_" + c] = scores[c]
+              "burden_score", "external_prior_adj", "feedback_adj", "sensitive_penalty",
+              "stage2_adj"]:
+        if c in scores.columns:
+            work["_" + c] = scores[c]
+        else:
+            work["_" + c] = 0.0
 
     rows = []
     for bkey, grp in work.groupby("_차주키", sort=False):
@@ -181,6 +185,7 @@ def aggregate_borrowers(df: pd.DataFrame, scores: pd.DataFrame,
             "external_prior_adj": rep["_external_prior_adj"],
             "feedback_adj": rep["_feedback_adj"],
             "sensitive_penalty": rep["_sensitive_penalty"],
+            "stage2_adj": rep["_stage2_adj"],
             "대표final": float(max_f),
         })
 

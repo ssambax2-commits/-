@@ -205,6 +205,16 @@ def run_pipeline(opt: RunOptions, progress: Optional[Callable] = None) -> RunRes
         if the_model is not None and the_model.warning:
             warnings.append(the_model.warning)
 
+        # 8-2) Stage2 예상회수(활성 시) → 소폭 additive 보너스
+        stage2_adj = None
+        recovery_pred = None
+        if the_model is not None and getattr(the_model, "stage2_enabled", False):
+            rec_arr = the_model.predict_recovery(X_keep)
+            if rec_arr is not None:
+                recovery_pred = pd.Series(rec_arr, index=idx_keep)
+                stage2_adj = recovery_pred.clip(lower=0, upper=1) * config.STAGE2_BONUS_CAP
+                diagnostics["Stage2 예상회수 평균"] = round(float(recovery_pred.mean()), 4)
+
         # 9) 피드백 EB → 계좌레벨 feedback_adj Series
         feedback_adj = None
         calib, mix, fb_warn, fb_diag = _obtain_calibration(opt, store, progress)
@@ -220,7 +230,7 @@ def run_pipeline(opt: RunOptions, progress: Optional[Callable] = None) -> RunRes
         scores = scoring.compute_scores(
             act_keep, pay_keep, opt.ref_date,
             age_bands=age_keep, biz_series=biz_keep,
-            paid_prob=paid_prob, feedback_adj=feedback_adj,
+            paid_prob=paid_prob, feedback_adj=feedback_adj, stage2_adj=stage2_adj,
             weights=opt.weights, ml_active=ml_active)
 
         # 11) 등급/차주통합
@@ -230,7 +240,13 @@ def run_pipeline(opt: RunOptions, progress: Optional[Callable] = None) -> RunRes
             cuts=opt.cuts, cap_s=opt.cap_s, cap_a=opt.cap_a, min_reco=opt.min_reco,
             age_bands=age_keep, biz_series=biz_keep)
 
-        # 12) 추천사유
+        # 12) 추천사유 (+ Stage2 예상회수 대표값 부착)
+        if recovery_pred is not None and len(borrowers) > 0:
+            borrowers["예상회수"] = [
+                (round(float(recovery_pred.get(r["대표index"])), 4)
+                 if r.get("대표index") in recovery_pred.index else None)
+                for _, r in borrowers.iterrows()
+            ]
         borrowers = reasons.add_reasons(borrowers)
 
         # 13) 피처 JSON (대표계좌 기준)
@@ -433,8 +449,8 @@ def _detail_frame(borrowers):
     cols = ["고객번호", "성명", "부담당자", "팀", "등급", "등급_raw", "등급상한",
             "borrower_score", "base_score", "paid_similarity_score",
             "payment_history_score", "burden_score", "external_prior_adj",
-            "sensitive_penalty", "feedback_adj", "collateral_key",
-            "회생", "채권상태(중)", "나이대", "개인사업자", "원금잔액",
-            "다중계좌원금잔액", "활동계좌수", "추천여부", "추천사유"]
+            "sensitive_penalty", "feedback_adj", "stage2_adj", "예상회수",
+            "collateral_key", "회생", "채권상태(중)", "나이대", "개인사업자",
+            "원금잔액", "다중계좌원금잔액", "활동계좌수", "추천여부", "추천사유"]
     have = [c for c in cols if c in borrowers.columns]
     return borrowers[have].copy()

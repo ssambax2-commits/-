@@ -114,6 +114,48 @@ def test_e2e_first_then_monthly(tmp_path, fast_ml):
     db2.close()
 
 
+def test_stage2_surfaced_when_enabled(tmp_path, fast_ml):
+    """Stage2 활성 시 예상회수 컬럼 표시 + 점수 반영(기본 OFF와 분리)."""
+    data_dir = str(tmp_path / "data")
+    train_csv = str(tmp_path / "train.csv")
+    act_csv = str(tmp_path / "act.csv")
+    synth.write_csv(synth.generate(n=2500, positive_rate=0.08, ref_date=REF, seed=21), train_csv)
+    synth.write_csv(synth.generate(n=1000, positive_rate=0.06, ref_date=REF, seed=22), act_csv)
+
+    opt = pipeline.RunOptions(
+        mode="first", activity_path=act_csv, training_path=train_csv,
+        ref_date=REF, month="2026-07", data_dir=data_dir,
+        include_detail=True, stage2_enabled=True)
+    res = pipeline.run_pipeline(opt)
+
+    assert res.diagnostics.get("Stage2(예상회수) 활성") is True
+    assert "Stage2 예상회수 평균" in res.diagnostics
+    assert "예상회수" in res.borrowers.columns
+    assert res.borrowers["예상회수"].notna().any()
+
+    # 상세진단(개발용) 시트에 예상회수/stage2_adj 노출
+    wb = load_workbook(res.report_path)
+    headers = [c.value for c in wb["상세진단(개발용)"][1]]
+    assert "예상회수" in headers
+    assert "stage2_adj" in headers
+
+
+def test_stage2_off_by_default(tmp_path, fast_ml):
+    """Stage2 미지정 → 비활성, 예상회수 컬럼 없음(기존 동작 보존)."""
+    data_dir = str(tmp_path / "data")
+    train_csv = str(tmp_path / "train.csv")
+    act_csv = str(tmp_path / "act.csv")
+    synth.write_csv(synth.generate(n=1500, positive_rate=0.08, ref_date=REF, seed=31), train_csv)
+    synth.write_csv(synth.generate(n=600, positive_rate=0.06, ref_date=REF, seed=32), act_csv)
+
+    opt = pipeline.RunOptions(
+        mode="first", activity_path=act_csv, training_path=train_csv,
+        ref_date=REF, month="2026-07", data_dir=data_dir)
+    res = pipeline.run_pipeline(opt)
+    assert res.diagnostics.get("Stage2(예상회수) 활성") is False
+    assert "예상회수" not in res.borrowers.columns
+
+
 def test_first_run_without_training_falls_back(tmp_path):
     """학습데이터 없이 최초 실행 → 규칙/prior 폴백으로 정상 동작."""
     data_dir = str(tmp_path / "data")

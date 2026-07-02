@@ -164,6 +164,7 @@ POSITIVE_MIN_FOR_ML = 30       # positive < 임계면 ML 신뢰도 경고 + 규�
 BAGGING_ENSEMBLE_SIZE = 21     # balanced bagging 앙상블 개수
 LIFT_TOP_K_PCT = 0.10          # 주 지표 Lift@상위K(%)
 STAGE2_ENABLED_DEFAULT = False  # 회수비율 회귀(Stage2) 기본 OFF
+STAGE2_BONUS_CAP = 3           # Stage2 활성 시 예상회수 → 소폭 점수 반영 상한(+)
 
 CATBOOST_PARAMS = {
     "iterations": 300,
