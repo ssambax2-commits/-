@@ -25,13 +25,47 @@ except ImportError:  # 스크립트 직접 실행 대비
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from corona_reco import config
 
-DEFAULT_THEME = "cosmo"   # ttkbootstrap 라이트 테마(전문적·플랫)
-_FALLBACK_THEMES = ["cosmo", "flatly", "litera", "yeti", "minty", "darkly"]
+# ---------------------------------------------------------------------------
+# 웰컴금융그룹 CI — 오렌지 톤 커스텀 테마
+#   primary(웰컴 오렌지) 중심, 웜그레이(≈Welcome Warm Gray) 중립색 사용.
+#   ※ 웰컴 공식 시그니처는 'Welcome Red'(#EA002C)이나, 사용자 요청에 따라
+#     오렌지 톤을 primary로 적용. 필요 시 primary를 #EA002C로 교체 가능.
+# ---------------------------------------------------------------------------
+WELCOME_ORANGE = "#FF6B00"
+WELCOME_ORANGE_ACTIVE = "#E85D00"
+WELCOME_WARM_GRAY = "#EAE0D3"
 
-# 팔레트(폴백 tk 위젯 색상용)
-COLOR_PRIMARY = "#2b6cb0"
+_WELCOME_LIGHT = {
+    "primary": WELCOME_ORANGE, "secondary": "#8C8078", "success": "#2E9E6B",
+    "info": "#4A7FB5", "warning": "#F2A100", "danger": "#E0483E",
+    "light": "#FBF4EC", "dark": "#3A342F",
+    "bg": "#FFFFFF", "fg": "#33302A",
+    "selectbg": WELCOME_ORANGE, "selectfg": "#FFFFFF",
+    "border": "#E7DDD2", "inputfg": "#33302A", "inputbg": "#FFFFFF",
+    "active": WELCOME_ORANGE_ACTIVE,
+}
+_WELCOME_DARK = {
+    "primary": "#FF7A1A", "secondary": "#B0A79E", "success": "#3AB57E",
+    "info": "#5E9BD6", "warning": "#F2A100", "danger": "#E86A62",
+    "light": "#3A342F", "dark": "#F3ECE4",
+    "bg": "#211D1A", "fg": "#F3ECE4",
+    "selectbg": "#FF7A1A", "selectfg": "#1A1A1A",
+    "border": "#3A342F", "inputfg": "#F3ECE4", "inputbg": "#2A2521",
+    "active": "#FF8C3A",
+}
+# (이름, 타입, 색상) — ttkbootstrap 등록용
+WELCOME_THEMES = [
+    ("welcome", "light", _WELCOME_LIGHT),
+    ("welcome-dark", "dark", _WELCOME_DARK),
+]
+
+DEFAULT_THEME = "welcome"   # 웰컴금융그룹 오렌지(라이트)
+_FALLBACK_THEMES = ["welcome", "welcome-dark", "cosmo", "flatly", "litera", "darkly"]
+
+# 팔레트(폴백 tk 위젯 색상용 — 웰컴 오렌지)
+COLOR_PRIMARY = WELCOME_ORANGE
 COLOR_HEADER_FG = "#ffffff"
-COLOR_MUTED = "#5a6b7b"
+COLOR_MUTED = "#8a7f76"
 
 
 def app_base_dir() -> str:
@@ -70,10 +104,22 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     using_tb = False
     try:
         import ttkbootstrap as tb  # type: ignore
+        from ttkbootstrap.style import ThemeDefinition
         try:
-            root = tb.Window(themename=theme)
+            root = tb.Window(themename="cosmo")  # 베이스(이후 웰컴 테마로 교체)
         except Exception:
-            root = tb.Window(themename="flatly")
+            root = tb.Window()
+        # 웰컴금융그룹 커스텀 테마 등록
+        for nm, tt, cols in WELCOME_THEMES:
+            try:
+                root.style.register_theme(ThemeDefinition(nm, cols, tt))
+            except Exception:  # noqa: BLE001
+                pass
+        # 요청 테마 적용(웰컴 기본), 미지원이면 cosmo
+        try:
+            root.style.theme_use(theme)
+        except Exception:  # noqa: BLE001
+            root.style.theme_use("cosmo")
         using_tb = True
     except Exception:  # noqa: BLE001
         root = tk.Tk()
@@ -105,31 +151,44 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
     log_q: "queue.Queue" = queue.Queue()
     state = {"running": False, "last": None}
 
-    # ======================= 헤더 배너 =======================
+    # ======================= 헤더 배너(웰컴 오렌지) =======================
+    hdr_bg = COLOR_PRIMARY
     if using_tb:
-        header = tb.Frame(root, bootstyle="primary")
-    else:
-        header = tk.Frame(root, bg=COLOR_PRIMARY)
+        try:
+            hdr_bg = root.style.colors.primary
+        except Exception:  # noqa: BLE001
+            hdr_bg = COLOR_PRIMARY
+
+    header = (tb.Frame(root, bootstyle="primary") if using_tb
+              else tk.Frame(root, bg=hdr_bg))
     header.pack(fill="x")
-    inner = (tb.Frame(header, bootstyle="primary") if using_tb
-             else tk.Frame(header, bg=COLOR_PRIMARY))
-    inner.pack(fill="x", padx=18, pady=12)
+    bar = (tb.Frame(header, bootstyle="primary") if using_tb
+           else tk.Frame(header, bg=hdr_bg))
+    bar.pack(fill="x", padx=18, pady=12)
 
-    def hlabel(parent, text, size, bold, muted=False):
+    # 웰컴 로고 배지(흰 원형 배지 + 오렌지 W)
+    logo = tk.Canvas(bar, width=48, height=48, highlightthickness=0, bg=hdr_bg, bd=0)
+    logo.pack(side="left", padx=(0, 14))
+    logo.create_oval(3, 3, 45, 45, fill="#FFFFFF", outline="")
+    _w_text_id = logo.create_text(24, 25, text="W", fill=hdr_bg, font=(fam, 22, "bold"))
+
+    textcol = (tb.Frame(bar, bootstyle="primary") if using_tb
+               else tk.Frame(bar, bg=hdr_bg))
+    textcol.pack(side="left", fill="x", expand=True)
+
+    def hlabel(parent, text, size, bold):
         if using_tb:
-            style = "inverse-primary"
-            lb = tb.Label(parent, text=text, bootstyle=style,
-                          font=(fam, size, "bold" if bold else "normal"))
-        else:
-            lb = tk.Label(parent, text=text, bg=COLOR_PRIMARY, fg=COLOR_HEADER_FG,
-                          font=(fam, size, "bold" if bold else "normal"))
-        return lb
+            return tb.Label(parent, text=text, bootstyle="inverse-primary",
+                            font=(fam, size, "bold" if bold else "normal"))
+        return tk.Label(parent, text=text, bg=hdr_bg, fg=COLOR_HEADER_FG,
+                        font=(fam, size, "bold" if bold else "normal"))
 
-    hlabel(inner, config.APP_NAME, 17, True).pack(anchor="w")
-    hlabel(inner, "채무조정 폐지 코로나채권 중 1개월 내 자발 상환 가능성이 높은 채권을 "
-                  "부담당자별로 추천합니다.", 10, False).pack(anchor="w", pady=(2, 0))
-    hlabel(inner, f"버전 {config.APP_VERSION}   ·   실행(추론) 중 외부 네트워크 호출 없음",
-           9, False).pack(anchor="w", pady=(2, 0))
+    hlabel(textcol, "웰컴금융그룹  ·  WELCOME FINANCIAL GROUP", 9, True).pack(anchor="w")
+    hlabel(textcol, config.APP_NAME, 17, True).pack(anchor="w", pady=(1, 0))
+    hlabel(textcol, "채무조정 폐지 코로나채권 중 1개월 내 자발 상환 가능성이 높은 채권을 "
+                    "부담당자별로 추천합니다.", 10, False).pack(anchor="w", pady=(2, 0))
+    hlabel(textcol, f"버전 {config.APP_VERSION}   ·   실행(추론) 중 외부 네트워크 호출 없음",
+           9, False).pack(anchor="w", pady=(1, 0))
 
     # ======================= 노트북(탭) =======================
     nb = ttk.Notebook(root)
@@ -220,10 +279,10 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
 
     # 실행 버튼 + 진행바
     action = ttk.Frame(tab_run); action.pack(fill="x", pady=(10, 4))
-    run_btn = ttk.Button(action, **bs({}, text="  ▶  실행하기  ", bootstyle="success"))
+    run_btn = ttk.Button(action, **bs({}, text="  ▶  실행하기  ", bootstyle="primary"))
     run_btn.pack(side="left")
     prog = ttk.Progressbar(action, mode="indeterminate", length=260,
-                           **bs({}, bootstyle="success-striped"))
+                           **bs({}, bootstyle="primary-striped"))
     prog.pack(side="left", padx=12)
     status_var = tk.StringVar(value="대기 중")
     ttk.Label(action, textvariable=status_var, foreground=COLOR_MUTED).pack(side="left")
@@ -304,6 +363,9 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
         if using_tb:
             try:
                 root.style.theme_use(var_theme.get())
+                newbg = root.style.colors.primary
+                logo.config(bg=newbg)
+                logo.itemconfigure(_w_text_id, fill=newbg)
                 lbg, lfg = theme_text_colors()
                 log_txt.config(background=lbg, foreground=lfg, insertbackground=lfg)
             except Exception:  # noqa: BLE001
