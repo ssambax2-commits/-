@@ -11,8 +11,8 @@ datas = []
 binaries = []
 hiddenimports = []
 
-# CatBoost: 데이터 파일 + 동적 라이브러리 + 서브모듈 전량 수집
-for pkg in ("catboost",):
+# CatBoost/ttkbootstrap: 데이터 파일 + 동적 라이브러리 + 서브모듈 전량 수집
+for pkg in ("catboost", "ttkbootstrap"):
     d, b, h = collect_all(pkg)
     datas += d
     binaries += b
