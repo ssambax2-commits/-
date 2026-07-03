@@ -83,6 +83,12 @@ def _write_grid(ws, headers: List[str], rows: List[list], grades: Optional[List[
     last_col = get_column_letter(len(headers))
     ws.auto_filter.ref = f"A1:{last_col}{max(1, len(rows) + 1)}"
     _autosize(ws, headers, rows)
+    # 인쇄 설정: 가로 방향 + 폭 맞춤(전체 컬럼 한 페이지 폭), 매 페이지 헤더 반복
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = "1:1"
 
 
 def _display_rows(borrowers: pd.DataFrame):
@@ -165,9 +171,11 @@ def _write_guide_sheet(wb, reco, borrowers, diagnostics, excluded_df, month):
                 lines.append([f"  {t}", int(c)])
     lines.append([""])
     lines.append(["■ 진단"])
-    if excluded_df is not None:
-        lines.append(["제외 계좌 수", int(len(excluded_df))])
-    for k, v in diagnostics.items():
+    # 제외 계좌 수는 diagnostics 에 이미 포함 → 중복 출력하지 않는다.
+    diag_items = dict(diagnostics)
+    if excluded_df is not None and "제외 계좌 수" not in diag_items:
+        diag_items["제외 계좌 수"] = int(len(excluded_df))
+    for k, v in diag_items.items():
         if isinstance(v, (str, int, float)):
             lines.append([str(k), v])
 
@@ -176,8 +184,15 @@ def _write_guide_sheet(wb, reco, borrowers, diagnostics, excluded_df, month):
             cell = ws.cell(row=ri, column=ci, value=val)
             if ri == 1 or (len(row) == 1 and str(row[0]).startswith("■")):
                 cell.font = BOLD
-    ws.column_dimensions["A"].width = 40
-    ws.column_dimensions["B"].width = 30
+        # 안내 문장(단일 셀 행)은 A~H 병합 → 인쇄 시 우측 잘림 방지
+        if len(row) == 1 and str(row[0]).strip() and not str(row[0]).startswith("■"):
+            ws.merge_cells(start_row=ri, start_column=1, end_row=ri, end_column=8)
+    ws.column_dimensions["A"].width = 36
+    ws.column_dimensions["B"].width = 22
+    # 인쇄 설정: 세로 방향 + 폭 맞춤(값 컬럼이 다음 페이지로 밀리지 않게)
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
 
 
 def _write_detail_sheet(wb, detail_df: pd.DataFrame, diagnostics: Dict):

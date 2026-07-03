@@ -94,6 +94,12 @@ def write_feedback_file(path: str, borrowers: pd.DataFrame,
     last_col = get_column_letter(len(USER_COLUMNS))
     ws.auto_filter.ref = f"A1:{last_col}{max(1, len(rows) + 1)}"
     _autosize(ws, USER_COLUMNS, rows)
+    # 인쇄 설정: 가로 방향 + 폭 맞춤, 매 페이지 헤더 반복
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.print_title_rows = "1:1"
 
     # 숨김 시트(모델용)
     wsh = wb.create_sheet("_모델메타")
