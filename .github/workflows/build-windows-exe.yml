@@ -1,0 +1,55 @@
+# 코로나채권 AI추천 — Windows 실행파일(.exe) 자동 빌드
+# GitHub의 Windows 서버에서 pytest(누수 게이팅 포함) 통과 후 PyInstaller로
+# 단일 exe를 만들어 (1) Actions 아티팩트, (2) 'exe-latest' Release에 올린다.
+name: build-windows-exe
+
+on:
+  workflow_dispatch:   # Actions 탭에서 'Run workflow' 버튼으로 수동 실행
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write   # Release 업로드용
+    steps:
+      - name: 소스 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 테스트 (실패 시 빌드 중단)
+        run: python -m pytest corona_reco/tests -q
+
+      - name: PyInstaller 단일 exe 빌드
+        run: pyinstaller corona_reco.spec --noconfirm
+
+      - name: 영문 파일명 사본 생성(다운로드 호환)
+        run: Copy-Item "dist/코로나채권AI추천.exe" "dist/CoronaReco.exe"
+
+      - name: 아티팩트 업로드 (Actions 실행 페이지에서 다운로드)
+        uses: actions/upload-artifact@v4
+        with:
+          name: corona-reco-windows-exe
+          path: dist/*.exe
+          retention-days: 30
+
+      - name: Release(exe-latest)에 업로드 — 고정 다운로드 링크
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view exe-latest 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create exe-latest -t "코로나채권 AI추천 - Windows 실행파일" -n "자동 빌드된 Windows exe. CoronaReco.exe 를 받으세요." --target $env:GITHUB_SHA
+          }
+          gh release upload exe-latest "dist/CoronaReco.exe" --clobber
+          gh release upload exe-latest "dist/코로나채권AI추천.exe" --clobber
