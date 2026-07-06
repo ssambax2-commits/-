@@ -99,10 +99,25 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self._init_schema()
 
+    # 기존 DB 마이그레이션용 추가 컬럼 (테이블, 컬럼, 타입)
+    _MIGRATIONS = [
+        ("recommendations", "원등급", "TEXT"),
+        ("recommendations", "최종등급", "TEXT"),
+        ("recommendations", "추천순위", "INTEGER"),
+        ("recommendations", "추천여부", "INTEGER"),
+        ("recommendations", "정원초과편입여부", "INTEGER"),
+        ("feedback", "활동여부", "INTEGER"),
+    ]
+
     def _init_schema(self):
         cur = self.conn.cursor()
         for ddl in SCHEMA.values():
             cur.execute(ddl)
+        for table, col, typ in self._MIGRATIONS:
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass  # 이미 존재
         self.conn.commit()
 
     def close(self):
@@ -154,6 +169,19 @@ class Store:
                 int(r.get("개인사업자", 0) or 0),
                 int(1 if str(r.get("collateral_key", "normal")) != "normal" else 0),
             ))
+            # 선택편향 진단용 확장 컬럼(§13)
+            cur.execute("""
+                UPDATE recommendations
+                SET 원등급=?, 최종등급=?, 추천순위=?, 추천여부=?, 정원초과편입여부=?
+                WHERE 추천월=? AND 고객번호=? AND 대출번호=?
+            """, (
+                str(r.get("원등급", r.get("등급", ""))),
+                str(r.get("최종등급", r.get("등급", ""))),
+                _to_int_or_none(r.get("추천순위_차주기준")),
+                int(bool(r.get("추천여부", False))),
+                int(bool(r.get("정원초과편입여부", False))),
+                month, str(r.get("고객번호", "")), loan_no,
+            ))
             cnt += 1
         self.conn.commit()
         return cnt
@@ -179,8 +207,8 @@ class Store:
             cur.execute("""
                 INSERT OR REPLACE INTO feedback
                 (추천월, 고객번호, 대출번호, 실제입금여부, 실제입금액, 입금일자,
-                 원금잔액, 회수비율, 성공여부, 등록시각)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                 원금잔액, 회수비율, 성공여부, 등록시각, 활동여부)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 str(r.get("추천월", "")), str(r.get("고객번호", "")), str(r.get("대출번호", "")),
                 _to_int_or_none(r.get("실제입금여부")),
@@ -190,6 +218,7 @@ class Store:
                 _to_float_or_none(r.get("회수비율")),
                 _to_int_or_none(r.get("성공여부")),
                 now,
+                _to_int_or_none(r.get("활동여부")),
             ))
             cnt += 1
         self.conn.commit()
@@ -273,6 +302,82 @@ class Store:
         cur = self.conn.cursor()
         cur.execute("SELECT COUNT(*) FROM feedback WHERE 성공여부 IS NOT NULL")
         return int(cur.fetchone()[0])
+
+    # ------------------------------------------------------------------
+    # 실적 검증(§12) / 선택편향 진단(§13)
+    # ------------------------------------------------------------------
+    def grade_performance(self) -> pd.DataFrame:
+        """등급별 실제 입금률/회수액 (recommendations×feedback 조인)."""
+        q = """
+            SELECT COALESCE(r.최종등급, r.등급) AS 등급,
+                   COUNT(*) AS 관측수,
+                   SUM(CASE WHEN f.성공여부=1 THEN 1 ELSE 0 END) AS 입금수,
+                   AVG(CASE WHEN f.성공여부=1 THEN 1.0 ELSE 0.0 END) AS 입금률,
+                   SUM(COALESCE(f.실제입금액,0)) AS 실제입금액합
+            FROM feedback f
+            JOIN recommendations r
+              ON f.추천월=r.추천월 AND f.고객번호=r.고객번호 AND f.대출번호=r.대출번호
+            WHERE f.성공여부 IS NOT NULL
+            GROUP BY COALESCE(r.최종등급, r.등급)
+        """
+        return pd.read_sql_query(q, self.conn)
+
+    def manager_performance(self) -> pd.DataFrame:
+        """담당자별 추천건수 대비 실제입금률."""
+        q = """
+            SELECT r.부담당자,
+                   COUNT(*) AS 관측수,
+                   AVG(CASE WHEN f.성공여부=1 THEN 1.0 ELSE 0.0 END) AS 입금률,
+                   SUM(COALESCE(f.실제입금액,0)) AS 실제입금액합
+            FROM feedback f
+            JOIN recommendations r
+              ON f.추천월=r.추천월 AND f.고객번호=r.고객번호 AND f.대출번호=r.대출번호
+            WHERE f.성공여부 IS NOT NULL
+            GROUP BY r.부담당자
+        """
+        return pd.read_sql_query(q, self.conn)
+
+    def selection_bias_stats(self) -> dict:
+        """추천/비추천·활동/비활동별 입금률 + 경고 여부(§13)."""
+        out = {"추천채권 입금률": None, "비추천채권 입금률": None,
+               "활동채권 입금률": None, "비활동채권 입금률": None,
+               "선택편향 경고": False, "경고사유": ""}
+        q = """
+            SELECT COALESCE(r.추천여부, 1) AS reco,
+                   AVG(CASE WHEN f.성공여부=1 THEN 1.0 ELSE 0.0 END) AS rate,
+                   COUNT(*) AS n
+            FROM feedback f
+            JOIN recommendations r
+              ON f.추천월=r.추천월 AND f.고객번호=r.고객번호 AND f.대출번호=r.대출번호
+            WHERE f.성공여부 IS NOT NULL
+            GROUP BY COALESCE(r.추천여부, 1)
+        """
+        df = pd.read_sql_query(q, self.conn)
+        n_reco = n_non = 0
+        for _, r in df.iterrows():
+            if int(r["reco"]) == 1:
+                out["추천채권 입금률"] = round(float(r["rate"]), 4)
+                n_reco = int(r["n"])
+            else:
+                out["비추천채권 입금률"] = round(float(r["rate"]), 4)
+                n_non = int(r["n"])
+        qa = """
+            SELECT 활동여부, AVG(CASE WHEN 성공여부=1 THEN 1.0 ELSE 0.0 END) AS rate
+            FROM feedback WHERE 성공여부 IS NOT NULL AND 활동여부 IS NOT NULL
+            GROUP BY 활동여부
+        """
+        try:
+            da = pd.read_sql_query(qa, self.conn)
+            for _, r in da.iterrows():
+                key = "활동채권 입금률" if int(r["활동여부"]) == 1 else "비활동채권 입금률"
+                out[key] = round(float(r["rate"]), 4)
+        except Exception:  # noqa: BLE001
+            pass
+        if n_reco > 0 and n_non == 0:
+            out["선택편향 경고"] = True
+            out["경고사유"] = ("피드백이 추천채권에만 존재 — 비추천채권의 자연입금도 "
+                           "피드백파일에 기입해야 편향 없이 학습됩니다.")
+        return out
 
 
 def _to_int_or_none(v):

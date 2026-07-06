@@ -124,18 +124,44 @@ def load_table(path: str, sheet_name=0) -> pd.DataFrame:
     - .xlsx/.xls: openpyxl 엔진
     문자열 컬럼은 dtype=str 로 읽어 고객번호/날짜 훼손을 막는다(숫자화는 사용처에서).
     """
+    from .util import UserFacingError
+    fname = os.path.basename(path)
     if not os.path.exists(path):
-        raise FileNotFoundError(f"파일을 찾을 수 없습니다: {path}")
+        raise UserFacingError(f"파일을 찾을 수 없습니다: {fname}")
     ext = os.path.splitext(path)[1].lower()
     if ext in (".csv", ".txt"):
         with open(path, "rb") as f:
             raw = f.read()
         df = _read_csv_bytes(raw)
-    elif ext in (".xlsx", ".xlsm", ".xls"):
-        # dtype=str 로 읽되, 엑셀 serial 날짜/숫자 보존을 위해 원본 유지
-        df = pd.read_excel(path, sheet_name=sheet_name, dtype=object)
+    elif ext in (".xlsx", ".xlsm"):
+        try:
+            df = pd.read_excel(path, sheet_name=sheet_name, dtype=object,
+                               engine="openpyxl")
+        except Exception as e:  # noqa: BLE001
+            raise UserFacingError(
+                f"엑셀 파일을 여는 중 오류가 발생했습니다: {fname} ({ext})",
+                detail=str(e)) from e
+    elif ext == ".xls":
+        # openpyxl은 .xlsx 전용 — 구형 .xls 는 xlrd 가 있을 때만 처리
+        try:
+            import xlrd  # noqa: F401
+        except ImportError:
+            raise UserFacingError(
+                "구형 .xls 파일은 현재 환경에서 직접 처리할 수 없습니다. "
+                "엑셀에서 .xlsx로 변환 후 다시 업로드하십시오.",
+                detail=f"문제 파일: {fname} (확장자 {ext}, xlrd 미설치)") from None
+        try:
+            df = pd.read_excel(path, sheet_name=sheet_name, dtype=object,
+                               engine="xlrd")
+        except Exception as e:  # noqa: BLE001
+            raise UserFacingError(
+                f".xls 파일을 여는 중 오류가 발생했습니다: {fname} — "
+                "엑셀에서 .xlsx로 변환 후 다시 시도하십시오.",
+                detail=str(e)) from e
     else:
-        raise ValueError(f"지원하지 않는 확장자입니다: {ext}")
+        raise UserFacingError(
+            f"지원하지 않는 파일 형식입니다: {fname} ({ext}) — "
+            "csv 또는 xlsx 파일을 사용하십시오.")
 
     if isinstance(df, dict):  # sheet_name=None 등
         # 첫 시트 사용
@@ -163,3 +189,14 @@ def has_col(df: pd.DataFrame, name: str) -> bool:
 
 def list_missing_columns(df: pd.DataFrame, required: List[str]) -> List[str]:
     return [c for c in required if c not in df.columns]
+
+
+def require_columns(df: pd.DataFrame, required: List[str], file_label: str) -> None:
+    """필수 컬럼 검증 — 누락 시 실무자용 안내 오류."""
+    from .util import UserFacingError
+    missing = list_missing_columns(df, required)
+    if missing:
+        raise UserFacingError(
+            f"{file_label}에 필수 컬럼이 없습니다: {', '.join(missing)}",
+            detail=f"파일의 컬럼 수: {len(df.columns)}개. "
+                   f"컬럼명이 다르면 표준 양식(샘플 파일)과 비교해 주세요.")

@@ -30,10 +30,11 @@ _FEEDBACK_ALIASES = {
     "고객번호": ["고객번호", "고객 번호"],
     "성명": ["성명", "이름", "고객명"],
     "대출번호": ["대출번호", "계좌번호", "계좌키"],
-    "등급": ["등급"],
+    "등급": ["등급", "최종등급"],
     "부담당자": ["부담당자", "부담당"],
     "팀": ["팀"],
     "회생": ["회생"],
+    "활동여부": ["활동여부", "활동", "컨택여부"],
 }
 
 _SUCCESS_YES = {"y", "예", "입금", "성공", "1", "o", "ok", "yes", "t", "true"}
@@ -133,6 +134,9 @@ def parse_feedback_file(path: str, store=None) -> Tuple[pd.DataFrame, List[str]]
     out["실제입금액"] = col("실제입금액").map(util.to_number)
     out["입금일자"] = col("입금일자")
     out["원금잔액"] = col("원금잔액").map(util.to_number)
+    out["활동여부"] = [
+        (1 if util.is_present(v) else (0 if util.clean_str(v) != "" else None))
+        for v in col("활동여부")]
 
     # 숨김시트로 대출번호/추천월 보강 (우리 파일)
     if hidden_df is not None:
@@ -207,7 +211,7 @@ def parse_feedback_file(path: str, store=None) -> Tuple[pd.DataFrame, List[str]]
         warnings.append("대출번호(계좌키)를 복구하지 못해 DB 매칭이 어려울 수 있습니다.")
 
     keep = ["추천월", "고객번호", "성명", "대출번호", "실제입금여부",
-            "실제입금액", "입금일자", "원금잔액", "회수비율", "성공여부"]
+            "실제입금액", "입금일자", "원금잔액", "회수비율", "성공여부", "활동여부"]
     return out[keep].copy(), warnings
 
 

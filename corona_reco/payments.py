@@ -207,6 +207,63 @@ def derive_payments(df: pd.DataFrame, ref_date: _dt.date) -> pd.DataFrame:
     return pd.DataFrame(rows, index=df.index)
 
 
+def _iter_dated_payments(df: pd.DataFrame):
+    """행별 (index, [(date, amount), ...]) — 일자 파싱 가능한 입금만.
+
+    named 헤더 우선, 없으면 위치 fallback(strict 가드 동일 적용).
+    """
+    columns = list(df.columns)
+    named = find_payment_pairs(columns)
+    use_positional = not named
+    ppairs = positional_pairs(df) if use_positional else None
+    arr = df.values if use_positional else None
+
+    for i in range(len(df)):
+        out = []
+        if named:
+            r = df.iloc[i]
+            pairs_vals = [((r[d] if d in r else None), (r[a] if a in r else None))
+                          for d, a in named]
+        else:
+            pairs_vals = []
+            for dpos, apos in ppairs:
+                dv = arr[i][dpos] if dpos < arr.shape[1] else None
+                av = arr[i][apos] if apos < arr.shape[1] else None
+                pairs_vals.append((dv, av))
+        for dv, av in pairs_vals:
+            amt = util.to_number(av)
+            if amt is None or amt <= 0:
+                continue
+            pdate = util.parse_date(dv)
+            if pdate is None:
+                continue  # 라벨은 일자 필수(불명 입금은 시간창 배치 불가)
+            if use_positional and not (_dt.date(1990, 1, 1) <= pdate):
+                continue
+            out.append((pdate, amt))
+        yield df.index[i], out
+
+
+def label_windows(df: pd.DataFrame, t0: _dt.date,
+                  windows_months=(1, 3)) -> pd.DataFrame:
+    """시간축 라벨(§4): 기준일 t0 이후 각 관측창 내 입금여부/입금액.
+
+    반환 컬럼: y_{m}m(0/1), amt_{m}m(합계), had_pay_before_t0(참고 진단용).
+    피처는 t0 이전 정보만 쓰도록 호출부에서 보장한다(ML X는 기표시점 고정값).
+    """
+    ends = {m: util.add_months(t0, m) for m in windows_months}
+    rows = []
+    for idx, pays in _iter_dated_payments(df):
+        rec = {}
+        before = any(d <= t0 for d, _ in pays)
+        for m in windows_months:
+            in_win = [a for d, a in pays if t0 < d <= ends[m]]
+            rec[f"y_{m}m"] = 1 if in_win else 0
+            rec[f"amt_{m}m"] = float(sum(in_win))
+        rec["had_pay_before_t0"] = before
+        rows.append(rec)
+    return pd.DataFrame(rows, index=df.index)
+
+
 def has_any_payment_columns(df: pd.DataFrame) -> bool:
     """입금 컬럼(named 또는 위치)이 존재하는지."""
     if find_payment_pairs(list(df.columns)):

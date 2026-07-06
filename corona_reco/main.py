@@ -410,7 +410,13 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
             res = pipeline.run_pipeline(opt, progress=lambda m: log_q.put(("log", m)))
             log_q.put(("done", res))
         except Exception as e:  # noqa: BLE001
-            log_q.put(("error", f"{e}\n{traceback.format_exc()}"))
+            from corona_reco.util import UserFacingError
+            if isinstance(e, UserFacingError):
+                # 실무자용 안내(§14): traceback 없이 사유/상세만 표시
+                msg = e.message + (f"\n상세: {e.detail}" if e.detail else "")
+                log_q.put(("uerror", msg))
+            else:
+                log_q.put(("error", f"{e}\n{traceback.format_exc()}"))
 
     def on_run():
         if state["running"]:
@@ -461,6 +467,12 @@ def build_app(theme: str = DEFAULT_THEME, base_dir: str = None):
                     log(payload)
                 elif kind == "done":
                     _finish(payload)
+                elif kind == "uerror":
+                    prog.stop(); run_btn.config(state="normal"); state["running"] = False
+                    status_var.set("중단")
+                    for line in str(payload).splitlines():
+                        log("안내: " + line)
+                    messagebox.showwarning("실행 중단 안내", str(payload))
                 elif kind == "error":
                     prog.stop(); run_btn.config(state="normal"); state["running"] = False
                     status_var.set("오류")

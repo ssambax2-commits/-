@@ -115,12 +115,14 @@ def generate(n: int = 2000, positive_rate: float = 0.06,
             "최종갱신금액": principal,  # 입금신호로 쓰면 안 됨(진단용)
         }
 
-        # 입금열 (positive만 채움)
+        # 입금열 (positive만 채움) — 시간축 라벨(t0=ref−3M) 학습이 가능하도록
+        # 70%는 최근 120일 내(관측창 포착), 30%는 과거 500일 내 분포
         if with_payments:
             n_pairs = random.randint(1, 3) if is_positive else 0
             for p in range(1, max_pairs + 1):
                 if p <= n_pairs:
-                    pd_date = _rand_date(ref_date - _dt.timedelta(days=500), ref_date)
+                    span = 120 if random.random() < 0.7 else 500
+                    pd_date = _rand_date(ref_date - _dt.timedelta(days=span), ref_date)
                     row[f"입금일자{p}"] = pd_date.strftime("%Y-%m-%d")
                     row[f"입금액{p}"] = random.choice([50000, 100000, 300000, 600000])
                 else:

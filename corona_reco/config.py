@@ -163,8 +163,58 @@ RANDOM_SEED = 20260701
 POSITIVE_MIN_FOR_ML = 30       # positive < 임계면 ML 신뢰도 경고 + 규칙/prior 폴백
 BAGGING_ENSEMBLE_SIZE = 21     # balanced bagging 앙상블 개수
 LIFT_TOP_K_PCT = 0.10          # 주 지표 Lift@상위K(%)
-STAGE2_ENABLED_DEFAULT = False  # 회수비율 회귀(Stage2) 기본 OFF
+STAGE2_ENABLED_DEFAULT = True  # 예상회수액 산정: 항상 시도, 불안정 시 세그먼트 평균 fallback
 STAGE2_BONUS_CAP = 3           # Stage2 활성 시 예상회수 → 소폭 점수 반영 상한(+)
+
+# --- 시간축 라벨(§ 라벨 정의/누수 방지) ---
+# 학습 기준일 t0 = 평가 기준일 − LABEL_TRAIN_OFFSET_MONTHS (3개월 관측창 확보)
+LABEL_TRAIN_OFFSET_MONTHS = 3
+LABEL_WINDOWS_MONTHS = (1, 3)   # 1개월 / 3개월 라벨
+
+# --- 업무 제외(추천 제외 → 제외채권/관리현황 시트로 분리) ---
+BIZ_EXCLUDE_MIN_PRINCIPAL = 1_000_000   # 원금잔액 100만원 이하 추천 제외
+# 부동산 담보성 상품: 담보세부종류에 '부동산' 포함 또는 상품군=담보
+# (채권구분=담보부NPL 은 '전환무담보'라 기존 배수/등급상한 로직 유지 — 제외 아님)
+MANAGED_STATUS_MID = {"정상", "정상_정상", "약속자"}   # 관리현황 분리 대상(상태중)
+MANAGED_STATUS_BIG = {"화해"}                          # 관리현황 분리 대상(상태대)
+
+# --- 법조치추천(참고용 별도 시트) 추출 기준 ---
+LEGAL_MIN_PRINCIPAL = 3_000_000      # 원금 300만 이상
+LEGAL_EXPIRY_MONTHS = 18             # 시효 18개월 이내 임박 시 우선
+LEGAL_NO_PAY_DAYS = 365              # 최근 1년 무입금
+
+# --- 최근입금 의존도 완화 ---
+RECENT_PAY_SMALL_AMT = 100_000       # 10만원 이하 소액입금 가점 제한
+RECENT_PAY_SMALL_MULT = 0.6          # 소액 단건 입금 시 payment score 배수
+RECENT_PAY_DEP_THRESHOLD = 0.60      # 최근입금 의존도(기여율) 경고 임계
+RECENT_PAY_ONLY_GRADE_CAP = "B"      # 최근입금 단독요인 과다 시 등급상한
+
+# --- 등급/추천 정책 (v4: S/A/B/C/D → 즉시관리/당월관리/보류 3단계) ---
+TIER_IMMEDIATE = "즉시관리"
+TIER_MONTH = "당월관리"
+TIER_HOLD = "보류"
+TIER_ORDER = [TIER_IMMEDIATE, TIER_MONTH, TIER_HOLD]
+RECO_TIERS = {TIER_IMMEDIATE, TIER_MONTH}   # 추천여부=True 허용(초과편입 포함)
+
+# 부담당자별 상한(차주 기준): 즉시+당월 기본 150, 고스코어 시 200까지 초과편입, 200 하드캡
+ASSIGNEE_BASE_CAP = 150
+ASSIGNEE_HARD_CAP = 200
+# 151~200 초과편입 임계: 정상편입(≤150) 점수의 중앙값 이상이면 편입(당월). 절대 하한 병행.
+OVERFLOW_ABS_FLOOR = 45.0
+MONTH_SCORE_FLOOR = 40.0            # 이 미만은 원등급 보류(점수 무관 추천 제외)
+# 즉시 vs 당월 경계(데이터 주도): 상위 점수 갭 탐색 실패 시 분위수 fallback
+IMMEDIATE_GAP_SEARCH_LO = 0.05     # 갭 탐색 하한(편입자 상위 5%)
+IMMEDIATE_GAP_SEARCH_HI = 0.50     # 갭 탐색 상한(상위 50%)
+IMMEDIATE_QUANTILE_FALLBACK = 0.30  # 갭 미탐지 시 상위 30% → 즉시
+GRADE_PERF_MIN_N = 5
+
+# --- §2 소액 과다추천 교정: 차주합산 원금잔액 하한(추천 제외) ---
+BORROWER_MIN_MULTI_PRINCIPAL = 5_000_000   # 동일차주 합산 500만 이하 차주 추천 제외
+
+# --- §3 랜덤박스(앱 표시 전용) ---
+RANDOMBOX_MIN_MULTI_PRINCIPAL = 10_000_000  # 합산 1,000만 이상
+RANDOMBOX_TOP_POOL = 20                      # 상위 20명 후보
+RANDOMBOX_PICK = 5                           # 그중 무작위 5명
 
 CATBOOST_PARAMS = {
     "iterations": 300,

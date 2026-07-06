@@ -154,6 +154,24 @@ def _safe_date(y: int, mo: int, da: int) -> Optional[_dt.date]:
         return None
 
 
+def add_months(d: _dt.date, months: int) -> _dt.date:
+    """월 단위 가감(말일 보정)."""
+    y = d.year + (d.month - 1 + months) // 12
+    m = (d.month - 1 + months) % 12 + 1
+    import calendar
+    day = min(d.day, calendar.monthrange(y, m)[1])
+    return _dt.date(y, m, day)
+
+
+class UserFacingError(Exception):
+    """실무자에게 그대로 보여줄 한국어 안내 오류(traceback 숨김)."""
+
+    def __init__(self, message: str, detail: str = ""):
+        super().__init__(message)
+        self.message = message
+        self.detail = detail
+
+
 def days_between(later: Optional[_dt.date], earlier: Optional[_dt.date]) -> Optional[int]:
     """later - earlier (일수). 하나라도 None이면 None."""
     if later is None or earlier is None:

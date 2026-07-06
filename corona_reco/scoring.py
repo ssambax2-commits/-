@@ -153,9 +153,16 @@ def _multi_active(val):
 # ---------------------------------------------------------------------------
 # payment_history_score (실제 입금이력 직접 우대)
 # ---------------------------------------------------------------------------
-def compute_payment_history_score(pay: pd.DataFrame) -> pd.Series:
+def compute_payment_history_score(pay: pd.DataFrame):
+    """payment_history_score + 소액 단건 가점제한 플래그(§7).
+
+    반환: (score Series, 가점제한여부 Series)
+    - 최근입금액 ≤ RECENT_PAY_SMALL_AMT(10만) 이고 입금 1건뿐이면
+      실효성 낮은 입금으로 보아 점수에 RECENT_PAY_SMALL_MULT(0.6) 배수 적용.
+    """
     n = len(pay)
     scores = np.zeros(n)
+    limited = np.zeros(n, dtype=bool)
     for i in range(n):
         if not bool(pay["입금_이력유무"].iloc[i]):
             scores[i] = 0.0
@@ -184,14 +191,32 @@ def compute_payment_history_score(pay: pd.DataFrame) -> pd.Series:
         elif bool(pay["입금_총액10만이상"].iloc[i]):
             bonus += 5
 
-        scores[i] = util.clamp(base + bonus, 0, 100)
-    return pd.Series(scores, index=pay.index, name="payment_history_score")
+        s = util.clamp(base + bonus, 0, 100)
+
+        # §7 소액 단건 가점제한: 10만 이하 1건뿐이면 배수 축소
+        amt = util.to_number(pay["입금_최근액"].iloc[i]) or 0
+        cnt = util.to_number(pay["입금_건수"].iloc[i]) or 0
+        if cnt <= 1 and 0 < amt <= config.RECENT_PAY_SMALL_AMT:
+            s *= config.RECENT_PAY_SMALL_MULT
+            limited[i] = True
+
+        scores[i] = s
+    return (pd.Series(scores, index=pay.index, name="payment_history_score"),
+            pd.Series(limited, index=pay.index, name="최근입금가점제한여부"))
 
 
 # ---------------------------------------------------------------------------
 # burden_score (현재원금 기준 상환 현실성)
 # ---------------------------------------------------------------------------
 def compute_burden_score(df: pd.DataFrame) -> pd.Series:
+    """상환 현실성(§2 재조정): 500만~3,000만 정점, 소액/대형은 낮게.
+
+    변경 전(v1): ≤100만 90 / ≤300만 100(소액 정점) / ≤1,000만 85 / ≤3,000만 65 /
+                 ≤5,000만 45 / >5,000만 25  → 소액 과다추천 유발.
+    변경 후(v4): ≤500만 55(추천 제외구간, 낮게) / 500만~1,000만 88 /
+                 1,000만~3,000만 100(정점) / 3,000만~5,000만 85 / 5,000만~1억 70 /
+                 >1억 55.  다중계좌 합산 과다 시 소폭 감점(유지).
+    """
     n = len(df)
     cur_principal = get_col(df, "현재원금")
     multi_sum = get_col(df, "다중계좌 원금합계")
@@ -200,27 +225,25 @@ def compute_burden_score(df: pd.DataFrame) -> pd.Series:
         cp = util.to_number(cur_principal.iloc[i])
         if cp is None:
             s = 50.0
-        elif cp <= 100 * _M:
-            s = 90.0
-        elif cp <= 300 * _M:
-            s = 100.0
+        elif cp <= 500 * _M:
+            s = 55.0            # 추천 제외 구간 — 정점 아님
         elif cp <= 1000 * _M:
-            s = 85.0
+            s = 88.0
         elif cp <= 3000 * _M:
-            s = 65.0
+            s = 100.0           # 정점
         elif cp <= 5000 * _M:
-            s = 45.0
+            s = 85.0
+        elif cp <= 10000 * _M:
+            s = 70.0
         else:
-            s = 25.0
+            s = 55.0
 
         ms = util.to_number(multi_sum.iloc[i])
         if ms is not None:
-            if ms > 5000 * _M:
-                s -= 20
-            elif ms > 3000 * _M:
-                s -= 10
-            elif ms > 1000 * _M:
-                s -= 5
+            if ms > 10000 * _M:
+                s -= 15
+            elif ms > 5000 * _M:
+                s -= 8
         scores[i] = util.clamp(s, 0, 100)
     return pd.Series(scores, index=df.index, name="burden_score")
 
@@ -331,7 +354,7 @@ def compute_scores(df: pd.DataFrame, pay: pd.DataFrame, ref_date: _dt.date,
     eff_w = adjust_weights_for_ml(weights, ml_active)
 
     base = compute_base_score(df, pay, ref_date)
-    payh = compute_payment_history_score(pay)
+    payh, pay_limited = compute_payment_history_score(pay)
     burden = compute_burden_score(df)
     prior_adj = compute_external_prior_adj(age_bands, biz_series, pay)
     penalty = compute_sensitive_penalty(df)
@@ -375,4 +398,8 @@ def compute_scores(df: pd.DataFrame, pay: pd.DataFrame, ref_date: _dt.date,
     out["stage2_adj"] = s2
     out["pre_score"] = pre
     out["final_score"] = final
+    # §7 최근입금 의존도 진단: pre_score 중 payment 컴포넌트 기여율(0~1)
+    dep = (eff_w["payment_history"] * payh) / pre.clip(lower=1e-9)
+    out["최근입금의존도"] = dep.clip(0, 1).round(3)
+    out["최근입금가점제한여부"] = pay_limited
     return out
