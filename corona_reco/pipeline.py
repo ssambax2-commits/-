@@ -41,9 +41,11 @@ class RunOptions:
     out_feedback_path: Optional[str] = None
     weights: Optional[Dict[str, float]] = None
     cuts: Optional[Dict[str, float]] = None
-    cap_s: int = None
-    cap_a: int = None
-    min_reco: int = None
+    cap_s: int = None                  # (구버전 호환, 미사용)
+    cap_a: int = None                  # (구버전 호환, 미사용)
+    min_reco: int = None               # (구버전 호환, 미사용)
+    base_cap: int = None               # 부담당자 기본 정원(즉시+당월, 기본 150)
+    hard_cap: int = None               # 하드캡(고스코어 초과편입 한계, 기본 200)
     exclude_expired_prescription: bool = None
     include_detail: bool = False
     stage2_enabled: bool = None        # (호환 유지 — 현재는 항상 시도+fallback)
@@ -406,7 +408,7 @@ def _run_pipeline_inner(opt: RunOptions, progress) -> RunResult:
         _log(progress, "차주 통합 · 원등급/최종등급 · S상한(동점처리)...")
         borrowers = grading.full_grading_pipeline(
             act_sc, scores, pay_sc, managers, teams,
-            cuts=opt.cuts, cap_s=opt.cap_s, cap_a=opt.cap_a, min_reco=opt.min_reco,
+            base_cap=opt.base_cap, hard_cap=opt.hard_cap,
             age_bands=age_sc, biz_series=biz_sc, exp_recovery=exp_recovery)
         borrowers = reasons.add_reasons(borrowers)
 

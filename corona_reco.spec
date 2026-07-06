@@ -11,12 +11,17 @@ datas = []
 binaries = []
 hiddenimports = []
 
-# CatBoost/ttkbootstrap: 데이터 파일 + 동적 라이브러리 + 서브모듈 전량 수집
-for pkg in ("catboost", "ttkbootstrap"):
-    d, b, h = collect_all(pkg)
-    datas += d
-    binaries += b
-    hiddenimports += h
+# CatBoost/CustomTkinter 등: 데이터 파일 + 동적 라이브러리 + 서브모듈 전량 수집
+# (customtkinter 는 테마 JSON·폰트 등 데이터 파일이 있어 collect_all 필수)
+for pkg in ("catboost", "customtkinter", "ttkbootstrap", "darkdetect"):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception:
+        pass
+hiddenimports += ["xlrd"]
 
 # 자주 누락되는 의존성 보강
 hiddenimports += collect_submodules("openpyxl")
