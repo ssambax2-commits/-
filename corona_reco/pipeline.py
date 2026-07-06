@@ -263,6 +263,17 @@ def _run_pipeline_inner(opt: RunOptions, progress) -> RunResult:
     os.makedirs(data_dir, exist_ok=True)
     store = store_mod.Store(_db_path(data_dir))
 
+    # §5-1 학습기억 무결성 점검 + 실행 시작 dirty 기록
+    store.ensure_store_state()
+    integ = store.check_integrity(os.path.exists(_model_path(data_dir)))
+    diagnostics["학습기억 상태"] = {"green": "🟢 정상", "yellow": "🟡 주의",
+                              "red": "🔴 위험(기억 손실)"}.get(integ["level"], integ["level"])
+    diagnostics["학습기억 안내"] = " / ".join(integ["messages"])
+    if integ["level"] == "red" and opt.mode == "monthly":
+        warnings.append("이전 학습 기억을 찾을 수 없습니다(최초 실행 필요). "
+                        "이번 실행은 규칙·prior 위주로 동작합니다.")
+    store.mark_dirty()
+
     try:
         # 1) 로드 + 필수컬럼/행 점검
         _log(progress, "활동데이터 로딩...")
@@ -458,6 +469,19 @@ def _run_pipeline_inner(opt: RunOptions, progress) -> RunResult:
         feedback_excel.write_feedback_file(
             feedback_path, borrowers, feature_json_by_key, model_version, opt.month)
 
+        # 18) 누적 학습 상태 갱신 + 정상종료 + 자동 백업(§5)
+        st = store.get_store_state() or {}
+        diagnostics["누적 학습표본 수"] = st.get("cum_samples", 0)
+        diagnostics["누적 positive 수"] = st.get("cum_positive", 0)
+        diagnostics["반영된 피드백 월 수"] = store.feedback_month_count()
+        diagnostics["마지막 학습일"] = st.get("last_train_date") or "-"
+        diagnostics["최초 학습일"] = st.get("first_train_date") or "-"
+        diagnostics["store_id"] = str(st.get("store_id", ""))[:8]
+        store.mark_clean()
+        bpath = store.backup()
+        if bpath:
+            diagnostics["자동 백업"] = os.path.basename(bpath)
+
         _log(progress, "완료.")
         return RunResult(borrowers=borrowers, accounts=accounts,
                          report_path=report_path, feedback_path=feedback_path,
@@ -479,13 +503,25 @@ def _prepare_model(opt, store, data_dir, progress):
             return None, diag
         _log(progress, "학습데이터 로딩 및 모델 학습(1M/3M 라벨)...")
         train_df = io_loader.load_table(opt.training_path)
+        io_loader.require_columns(train_df, ["고객번호", "대출번호"], "학습데이터")
         X, labels, groups, time_order, cat_features, lab_diag = \
             build_training_data(train_df, opt.ref_date)
+        if int(labels["1m"][0].sum()) < config.POSITIVE_MIN_FOR_ML:
+            diag["학습 경고"] = (
+                f"1M positive {int(labels['1m'][0].sum())}건 < 임계 "
+                f"{config.POSITIVE_MIN_FOR_ML} — 규칙·prior 위주로 폴백합니다.")
         diag.update(lab_diag)
         m = model_mod.train_and_validate(X, labels, cat_features,
                                          groups=groups, time_order=time_order)
         m.save(mpath)
         _save_snapshot(spath, X, labels, groups, time_order, cat_features)
+        # §5 초기 학습데이터 원천 DB 보존(1회) + 누적 통계 갱신
+        if store.training_row_count() == 0:
+            store.save_training_rows(train_df, "최초학습")
+        store.update_train_stats(cum_samples=len(X),
+                                 cum_positive=int(labels["1m"][0].sum()),
+                                 feedback_months=store.feedback_month_count(),
+                                 is_first=True)
         store.save_model_meta(m.version, m.n_positive, m.n_negative, m.metrics,
                               mpath, adopted=m.metrics.get("adopted", True))
         diag["모델버전"] = m.version
@@ -517,9 +553,18 @@ def _prepare_model(opt, store, data_dir, progress):
             challenger.save(mpath)
             store.save_model_meta(challenger.version, challenger.n_positive,
                                   challenger.n_negative, challenger.metrics, mpath, True)
+            store.update_train_stats(
+                cum_samples=store.training_row_count() + store.total_feedback_observations(),
+                cum_positive=int(challenger.n_positive),
+                feedback_months=store.feedback_month_count(), is_first=False)
             diag["모델"] = f"challenger 채택(Lift@10% {challenger.metrics.get('lift@k')})"
             return challenger, diag
         diag["모델"] = "challenger 미채택 — 기존 챔피언 유지"
+    # 챔피언 유지 시에도 피드백 월수 갱신
+    store.update_train_stats(
+        cum_samples=store.training_row_count() + store.total_feedback_observations(),
+        cum_positive=int(champion.n_positive),
+        feedback_months=store.feedback_month_count(), is_first=False)
     return champion, diag
 
 
@@ -543,7 +588,6 @@ def _try_incremental(store, champion, spath, progress):
         return None
     _log(progress, "피드백 증분 학습(challenger)...")
     X = pd.concat([snap["X"], Xp], ignore_index=True)
-    n0 = len(snap["X"])
     labels = {}
     y1, a1 = snap["labels"]["1m"]
     labels["1m"] = (np.concatenate([y1, yp]), np.concatenate([a1, amtp]))

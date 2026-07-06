@@ -8,9 +8,12 @@ store.py — SQLite 스키마·누적·dedup·모델메타 (§6-2)
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
+import shutil
 import sqlite3
+import uuid
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -88,7 +91,35 @@ SCHEMA = {
             PRIMARY KEY (갱신월, 세그먼트키)
         )
     """,
+    # §5-1 학습기억 무결성 상태(단일 행)
+    "store_state": """
+        CREATE TABLE IF NOT EXISTS store_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            store_id TEXT,
+            schema_version TEXT,
+            first_train_date TEXT,
+            last_train_date TEXT,
+            feedback_months INTEGER,
+            cum_samples INTEGER,
+            cum_positive INTEGER,
+            last_clean_exit TEXT,
+            dirty INTEGER,
+            checksum TEXT,
+            updated_at TEXT
+        )
+    """,
+    # 초기 학습데이터 원천 보존(누적 재학습 기반, §5)
+    "training_rows": """
+        CREATE TABLE IF NOT EXISTS training_rows (
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            등록시각 TEXT,
+            원천 TEXT,
+            payload TEXT
+        )
+    """,
 }
+
+STORE_SCHEMA_VERSION = "v4-tier-1"
 
 
 class Store:
@@ -125,6 +156,173 @@ class Store:
             self.conn.close()
         except Exception:  # noqa: BLE001
             pass
+
+    # ==================================================================
+    # §5-1 학습기억 무결성 · 백업 · 감사로그
+    # ==================================================================
+    def _audit(self, msg: str):
+        try:
+            log = os.path.join(os.path.dirname(self.db_path), "store_audit.log")
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"{_dt.datetime.now().isoformat(timespec='seconds')}\t{msg}\n")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def ensure_store_state(self) -> dict:
+        """store_state 행이 없으면 신규 store_id로 생성. 반환: 현재 상태 dict."""
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM store_state WHERE id=1")
+        row = cur.fetchone()
+        if row is None:
+            sid = uuid.uuid4().hex
+            now = _dt.datetime.now().isoformat(timespec="seconds")
+            cur.execute("""
+                INSERT INTO store_state
+                (id, store_id, schema_version, first_train_date, last_train_date,
+                 feedback_months, cum_samples, cum_positive, last_clean_exit,
+                 dirty, checksum, updated_at)
+                VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+            """, (sid, STORE_SCHEMA_VERSION, None, None, 0, 0, 0, None, 0, None, now))
+            self.conn.commit()
+            self._audit(f"store_state 신규 생성 store_id={sid}")
+            cur.execute("SELECT * FROM store_state WHERE id=1")
+            row = cur.fetchone()
+        return dict(row)
+
+    def get_store_state(self) -> Optional[dict]:
+        cur = self.conn.cursor()
+        cur.execute("SELECT * FROM store_state WHERE id=1")
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+    def mark_dirty(self):
+        self.ensure_store_state()
+        cur = self.conn.cursor()
+        cur.execute("UPDATE store_state SET dirty=1, updated_at=? WHERE id=1",
+                    (_dt.datetime.now().isoformat(timespec="seconds"),))
+        self.conn.commit()
+        self._audit("실행 시작(dirty=1)")
+
+    def mark_clean(self):
+        cur = self.conn.cursor()
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        cur.execute("UPDATE store_state SET dirty=0, last_clean_exit=?, checksum=?, "
+                    "updated_at=? WHERE id=1", (now, self._data_checksum(), now))
+        self.conn.commit()
+        self._audit("정상 종료(dirty=0)")
+
+    def update_train_stats(self, cum_samples: int, cum_positive: int,
+                           feedback_months: int, is_first: bool):
+        self.ensure_store_state()
+        cur = self.conn.cursor()
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        if is_first:
+            cur.execute("UPDATE store_state SET first_train_date="
+                        "COALESCE(first_train_date, ?) WHERE id=1", (now,))
+        cur.execute("""UPDATE store_state SET last_train_date=?, cum_samples=?,
+                       cum_positive=?, feedback_months=?, updated_at=? WHERE id=1""",
+                    (now, int(cum_samples), int(cum_positive),
+                     int(feedback_months), now))
+        self.conn.commit()
+        self._audit(f"학습 갱신 표본={cum_samples} pos={cum_positive} fb월={feedback_months}")
+
+    def _data_checksum(self) -> str:
+        """추천/피드백/학습행 카운트 기반 체크섬(무결성 감지용)."""
+        cur = self.conn.cursor()
+        parts = []
+        for t in ("recommendations", "feedback", "training_rows", "model_meta"):
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {t}")
+                parts.append(f"{t}:{cur.fetchone()[0]}")
+            except sqlite3.OperationalError:
+                parts.append(f"{t}:NA")
+        return hashlib.sha1("|".join(parts).encode()).hexdigest()[:16]
+
+    def feedback_month_count(self) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(DISTINCT 추천월) FROM feedback WHERE 성공여부 IS NOT NULL")
+        return int(cur.fetchone()[0])
+
+    def training_row_count(self) -> int:
+        cur = self.conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM training_rows")
+        return int(cur.fetchone()[0])
+
+    def check_integrity(self, model_exists: bool) -> dict:
+        """앱 시작 시 무결성 점검 → 3색 상태(🟢/🟡/🔴) + 메시지(§5-1)."""
+        st = self.get_store_state()
+        result = {"level": "green", "store_id": None, "messages": [], "state": st}
+        if st is None or (st.get("cum_samples", 0) or 0) == 0 and self.training_row_count() == 0:
+            result["level"] = "red"
+            result["messages"].append(
+                "이전에 학습한 누적 기억을 찾을 수 없습니다. 지금 실행하면 "
+                "최초 상태에서 새로 시작됩니다.")
+            result["messages"].append(
+                f"data 폴더 위치: {os.path.dirname(os.path.abspath(self.db_path))}")
+            return result
+        result["store_id"] = st.get("store_id")
+        warns = []
+        if st.get("schema_version") != STORE_SCHEMA_VERSION:
+            warns.append(f"스키마 버전 불일치({st.get('schema_version')}≠{STORE_SCHEMA_VERSION})")
+        if int(st.get("dirty", 0) or 0) == 1:
+            warns.append("직전 실행이 비정상 종료된 흔적(dirty=1)")
+        if st.get("checksum") and st["checksum"] != self._data_checksum():
+            warns.append("데이터 체크섬 불일치(외부 변경/손상 의심)")
+        if not model_exists:
+            warns.append("모델 파일 누락")
+        if warns:
+            result["level"] = "yellow"
+            result["messages"] = warns
+        else:
+            result["messages"].append(
+                f"누적 학습 기억 유지 중 — 최초학습 {st.get('first_train_date') or '-'}, "
+                f"반영 피드백 {st.get('feedback_months', 0)}개월, "
+                f"누적표본 {st.get('cum_samples', 0)}, "
+                f"마지막학습 {st.get('last_train_date') or '-'}, "
+                f"store_id {str(st.get('store_id'))[:8]}")
+        return result
+
+    def backup(self, keep: int = 10) -> Optional[str]:
+        """DB를 data/backup/ 로 자동 백업(최근 keep개 회전)."""
+        try:
+            bdir = os.path.join(os.path.dirname(self.db_path), "backup")
+            os.makedirs(bdir, exist_ok=True)
+            stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M")
+            dst = os.path.join(bdir, f"CoronaReco_{stamp}.db")
+            self.conn.commit()
+            shutil.copy2(self.db_path, dst)
+            self._audit(f"백업 생성 {os.path.basename(dst)}")
+            backups = sorted(f for f in os.listdir(bdir)
+                             if f.startswith("CoronaReco_") and f.endswith(".db"))
+            for old in backups[:-keep]:
+                try:
+                    os.remove(os.path.join(bdir, old))
+                except OSError:
+                    pass
+            return dst
+        except Exception:  # noqa: BLE001
+            return None
+
+    def list_backups(self) -> List[str]:
+        bdir = os.path.join(os.path.dirname(self.db_path), "backup")
+        if not os.path.isdir(bdir):
+            return []
+        return sorted((os.path.join(bdir, f) for f in os.listdir(bdir)
+                       if f.startswith("CoronaReco_") and f.endswith(".db")), reverse=True)
+
+    def save_training_rows(self, df: pd.DataFrame, source: str) -> int:
+        """초기 학습데이터 원천을 DB에 1회 보존(누적 재학습 기반)."""
+        cur = self.conn.cursor()
+        now = _dt.datetime.now().isoformat(timespec="seconds")
+        cnt = 0
+        for _, r in df.iterrows():
+            payload = json.dumps({k: (None if pd.isna(v) else v) for k, v in r.items()},
+                                 ensure_ascii=False, default=str)
+            cur.execute("INSERT INTO training_rows (등록시각, 원천, payload) VALUES (?,?,?)",
+                        (now, source, payload))
+            cnt += 1
+        self.conn.commit()
+        return cnt
 
     # ------------------------------------------------------------------
     # recommendations
