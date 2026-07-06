@@ -114,8 +114,24 @@ def test_prior_clamp():
 # payment_history_score 스펙 확인
 def test_payment_history_bands():
     pay = make_pay(has=True, within180=True, within365=True)
-    s = scoring.compute_payment_history_score(pay)
+    s, limited = scoring.compute_payment_history_score(pay)
     assert s.iloc[0] == 100
+    assert not limited.iloc[0]
 
     pay2 = make_pay(has=False)
-    assert scoring.compute_payment_history_score(pay2).iloc[0] == 0
+    s2, _ = scoring.compute_payment_history_score(pay2)
+    assert s2.iloc[0] == 0
+
+
+def test_small_single_payment_limited():
+    """§7 소액(10만↓) 단건 입금 → 가점 제한 배수 적용."""
+    import pandas as pd
+    pay = pd.DataFrame([{
+        "입금_이력유무": True, "입금_최근180일": True, "입금_최근365일": True,
+        "입금_최근730일": True, "입금_최근일": REF, "입금_건수2이상": False,
+        "입금_건수3이상": False, "입금_총액10만이상": False, "입금_총액50만이상": False,
+        "입금_일자불명금액존재": False, "입금_총액": 50000, "입금_건수": 1, "입금_최근액": 50000,
+    }])
+    s, limited = scoring.compute_payment_history_score(pay)
+    assert limited.iloc[0]
+    assert s.iloc[0] == 100 * config.RECENT_PAY_SMALL_MULT
